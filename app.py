@@ -1,51 +1,70 @@
 import streamlit as st
 import pandas as pd
-from scrapling import Fetcher
+import httpx
+from selectolax.lexbor import LexborHTMLParser
 
 # Cấu hình giao diện
-st.set_page_config(page_title="Leads Finder", layout="wide")
+st.set_page_config(page_title="Leads Finder Pro", layout="wide")
 
-def run_scraper(target_url, container, name_sel, phone_sel):
-    # Sử dụng network_lib='curl_cffi' để không cần cài đặt Playwright phức tạp trên Cloud
-    fetcher = Fetcher(network_lib='curl_cffi')
+def scrape_data(url, container_sel, name_sel, phone_sel):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
-        page = fetcher.get(target_url)
-        # Sử dụng cấu trúc lọc dữ liệu an toàn
-        items = page.css(container)
-        data = []
-        
-        for item in items:
-            name = item.css_first(name_sel).text.strip() if item.css_first(name_sel) else "N/A"
-            phone = item.css_first(phone_sel).text.strip() if item.css_first(phone_sel) else "N/A"
-            data.append({"Tên": name, "Liên hệ": phone})
+        # Gửi yêu cầu tải trang
+        with httpx.Client(headers=headers, follow_redirects=True, timeout=30.0) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
             
-        return data
+        # Phân tích cú pháp HTML
+        parser = LexborHTMLParser(resp.text)
+        results = []
+        
+        # Tìm các khối dữ liệu
+        for node in parser.css(container_sel):
+            name_node = node.css_first(name_sel)
+            phone_node = node.css_first(phone_sel)
+            
+            results.append({
+                "Tên khách hàng": name_node.text().strip() if name_node else "N/A",
+                "Liên hệ": phone_node.text().strip() if phone_node else "N/A"
+            })
+        return results
     except Exception as e:
-        st.error(f"Lỗi truy cập: {str(e)}")
+        st.error(f"Lỗi hệ thống: {str(e)}")
         return None
 
-# --- UI ---
-st.title("🚀 Công cụ Tìm Kiếm Khách Hàng")
+# --- GIAO DIỆN NGƯỜI DÙNG ---
+st.title("🚀 Hệ Thống Trích Xuất Khách Hàng")
+st.markdown("---")
 
-col1, col2 = st.columns([1, 2])
+with st.sidebar:
+    st.header("Cấu hình mục tiêu")
+    target_url = st.text_input("Địa chỉ website (URL):", placeholder="https://example.com")
+    c_tag = st.text_input("Mã vùng chứa (Container):", value=".item")
+    n_tag = st.text_input("Mã tên khách hàng:", value="h3")
+    p_tag = st.text_input("Mã số điện thoại:", value=".phone")
+    submit = st.button("QUÉT DỮ LIỆU", use_container_width=True)
 
-with col1:
-    url = st.text_input("Link website mục tiêu:")
-    c_tag = st.text_input("Mã vùng chứa (Container):", ".business-card")
-    n_tag = st.text_input("Mã Tên:", "h2")
-    p_tag = st.text_input("Mã SĐT:", ".phone")
-    btn = st.button("Bắt đầu quét", use_container_width=True)
-
-with col2:
-    if btn and url:
-        with st.spinner("Đang xử lý..."):
-            results = run_scraper(url, c_tag, n_tag, p_tag)
-            if results:
-                df = pd.DataFrame(results)
-                st.success(f"Tìm thấy {len(results)} kết quả!")
+if submit:
+    if not target_url:
+        st.warning("Vui lòng nhập URL!")
+    else:
+        with st.spinner("Đang thực hiện trích xuất dữ liệu nâng cao..."):
+            data = scrape_data(target_url, c_tag, n_tag, p_tag)
+            
+            if data:
+                df = pd.DataFrame(data)
+                st.success(f"Hoàn thành! Tìm thấy {len(data)} khách hàng.")
                 st.dataframe(df, use_container_width=True)
                 
+                # Xuất dữ liệu
                 csv = df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("Tải file CSV", data=csv, file_name="leads.csv")
+                st.download_button(
+                    label="TẢI FILE KẾT QUẢ (CSV)",
+                    data=csv,
+                    file_name="results.csv",
+                    mime="text/csv"
+                )
             else:
-                st.warning("Không lấy được dữ liệu. Kiểm tra lại Link hoặc Mã định danh.")
+                st.error("Không có dữ liệu được tìm thấy. Hãy kiểm tra lại các mã định danh HTML.")
